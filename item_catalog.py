@@ -60,7 +60,6 @@ def showItem(category_id, item_id):
     createSession()
     categories = db.getListOfCategories()
     item = db.getItemBy(item_id)
-    print uploaded_file(item[0].image_url)
     return render_template('item.html',
                            categories=categories,
                            item=item,
@@ -76,11 +75,11 @@ def uploaded_file(filename):
 
 
 # CRUD Operations
+#Add Item
 @app.route('/category/<int:category_id>/addItem', methods=['GET', 'POST'])
 def addItemToCategory(category_id):
     if 'name' not in session:
         return redirect(url_for('showCategories'))
-
     else:
         category = db.getCategoryBy(category_id)
         if request.method == 'POST':
@@ -109,7 +108,7 @@ def addItemToCategory(category_id):
                                    category=category,
                                    STATE=session.get('state'))
 
-
+#Edit Item
 @app.route('/category/<int:category_id>/editItem/<int:item_id>/', methods=['GET', 'POST'])
 def editItem(category_id, item_id):
     if 'name' not in session:
@@ -148,28 +147,25 @@ def editItem(category_id, item_id):
                                item=item_to_edit[0],
                                STATE=session.get('state'))
 
-
-@app.route('/category/<int:category_id>/deleteItem/<int:item_id>/', methods=['GET', 'POST'])
-def deleteItem(category_id, item_id):
-    if 'name' not in session:
-        return redirect(url_for('showCategories'))
-
-    item_to_delete = db.getItemBy(item_id)
-
+#Delete Item
+def delete_item(category_id, item_id):
     if request.method == 'POST':
-        if checkIfClientAuthorizedWith(request.form['state']) is False:
-            return responseWith('Invalid authorization paramaters.', 401)
-
-        db.deleteFromDatabase(item_to_delete[0])
-
-        return redirect(url_for('showItemsForCategory',
-                                category_id=item_to_delete[1].id))
+        item = db_item(session, item_id)
+        if item and is_logged_in_as_owner(login_session, item.user_id):
+            db_delete_item(session, item)
+            return redirect(url_for('show_items_in_category', category_id=category_id))
+        else:
+            # problem with item, try again
+            return redirect(url_for('delete_item', category_id=category_id, item_id=item_id))
     else:
-        return render_template('deleteItem.html',
-                               category=item_to_delete[1],
-                               item=item_to_delete[0],
-                               STATE=session.get('state'))
-
+        category = db_category(session, category_id)
+        item = db_item(session, item_id)
+        if is_logged_in_as_owner(login_session, item):
+            return render_template('deleteitem.html', category=category, item=item,
+                                   is_logged_in=is_already_logged_in(login_session))
+        else:
+            flash("To delete an item, you must first be logged as the item's owner.")
+            return redirect(url_for('showLogin'))
 
 #Connect and Disconnect endpoints.
 @app.route('/gconnect', methods=['POST'])
@@ -229,13 +225,11 @@ def validateAccess():
         setTokenInfo(result)
     return checkIfTokenInfoAndCrednetialForSameUser()
 
-
 def checkIfTokenInfoAndCrednetialForSameUser():
     if token_info['user_id'] != credentials.id_token['sub']:
         return responseWith('Token\'s user ID doesn\'t match given user ID.', 401)
     else:
         return checkIfTokenIssuedToClient()
-
 
 def checkIfTokenIssuedToClient():
     if token_info['issued_to'] != CLIENT_ID:
@@ -243,14 +237,12 @@ def checkIfTokenIssuedToClient():
     else:
         return checkIfUserLoggedIn()
 
-
 def checkIfUserLoggedIn():
     if session.get('credentials') is not None:
         if credentials.id_token['sub'] == session.get('gplus_id'):
             return responseWith('Current user is already connected.', 200)
     else:
         return getUserInfoAndCreateSession()
-
 
 def getUserInfoAndCreateSession():
     url = 'https://www.googleapis.com/oauth2/v1/userinfo'
@@ -265,7 +257,6 @@ def getUserInfoAndCreateSession():
     session['user_id'] = db.getUserBy(session).id
     print session.get('access_token')
     return responseWith('User successfully connected.', 200)
-
 
 def logout():
     if session.get('access_token')is None:
@@ -284,17 +275,14 @@ def logout():
     else:
         return responseWith('Failed to revoke token for given user.', 400)
 
-
 # Setters for global variables
 def setCredentials(new_credential):
     global credentials
     credentials = new_credential
 
-
 def setTokenInfo(token):
     global token_info
     token_info = token
-
 
 #Utility Methods
 def allowed_file(filename):
@@ -302,18 +290,15 @@ def allowed_file(filename):
         return False
     return '.' in filename and filename.rsplit('.', 1)[1] in ALLOWED_EXTENSIONS
 
-
 def createSession():
     if session.get('state') is None:
         session['state'] = ''.join(random.choice(string.ascii_uppercase + string.digits)
                            for x in xrange(32))
 
-
 def responseWith(message, response_code):
     response = make_response(json.dumps(message), response_code)
     response.headers['Content-Type'] = 'application/json'
     return response
-
 
 if __name__ == "__main__":
     app.secret_key = 'super_secret_key'
