@@ -4,8 +4,9 @@ import requests
 import string
 import random
 import os
-from flask import Flask, url_for, session, redirect, request, render_template
+from flask import Flask, g, url_for, session, redirect, request, render_template
 from flask import jsonify, make_response, send_from_directory
+from functools import wraps
 from item_database_config import Item
 from database_operations import DatabaseOperations
 from oauth2client.client import flow_from_clientsecrets
@@ -22,10 +23,10 @@ token_info = {}
 
 CLIENT_ID = json.loads(open('client_secret.json', 'r').read())['web']['client_id']
 UPLOAD_FOLDER = 'images'
-ALLOWED_EXTENSIONS = set(['png', 'jpg', 'jpeg', 'gif'])
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-
+app.config['MAX_CONTENT_LENGTH'] = 2 * 1024 * 1024
 
 # Static Pages
 @app.route('/')
@@ -73,10 +74,19 @@ def showItem(category_id, item_id):
 def uploaded_file(filename):
     return send_from_directory(app.config['UPLOAD_FOLDER'], filename)
 
-
 # CRUD Operations
-#Add Item
+def login_required(f):
+  @wraps(f)
+  def decorated_function(*args, **kwargs):
+    if 'username' not in login_session:
+      return redirect('login')
+   else:
+      f()
+  return decorated_function
+
+#Add item
 @app.route('/category/<int:category_id>/addItem', methods=['GET', 'POST'])
+@login_required
 def addItemToCategory(category_id):
     if 'name' not in session:
         return redirect(url_for('showCategories'))
@@ -110,9 +120,8 @@ def addItemToCategory(category_id):
 
 #Edit Item
 @app.route('/category/<int:category_id>/editItem/<int:item_id>/', methods=['GET', 'POST'])
+@login_required
 def editItem(category_id, item_id):
-    if 'name' not in session:
-        return redirect(url_for('showCategories'))
 
     item_to_edit = db.getItemBy(item_id)
 
@@ -148,24 +157,29 @@ def editItem(category_id, item_id):
                                STATE=session.get('state'))
 
 #Delete Item
+@app.route('/category/<int:category_id>/deleteItem/<int:item_id>/', methods=['GET', 'POST'])
+@login_required
 def delete_item(category_id, item_id):
+
+    item_to_delete = db.getItemBy(item_id)
+
+    if item_to_delete['user_id'] != login_session['user_id']:
+      return responseWith('Item not found')
+
     if request.method == 'POST':
-        item = db_item(session, item_id)
-        if item and is_logged_in_as_owner(login_session, item.user_id):
-            db_delete_item(session, item)
-            return redirect(url_for('show_items_in_category', category_id=category_id))
-        else:
-            # problem with item, try again
-            return redirect(url_for('delete_item', category_id=category_id, item_id=item_id))
+        if checkIfClientAuthorizedWith(request.form['state']) is False:
+            return responseWith('Invalid authorization paramaters.', 401)
+
+        db.deleteFromDatabase(item_to_delete[0])
+
+        return redirect(url_for('showItemsForCategory',
+                                category_id=item_to_delete[1].id))
     else:
-        category = db_category(session, category_id)
-        item = db_item(session, item_id)
-        if is_logged_in_as_owner(login_session, item):
-            return render_template('deleteitem.html', category=category, item=item,
-                                   is_logged_in=is_already_logged_in(login_session))
-        else:
-            flash("To delete an item, you must first be logged as the item's owner.")
-            return redirect(url_for('showLogin'))
+        return render_template('deleteItem.html',
+                               category=item_to_delete[1],
+                               item=item_to_delete[0],
+                               STATE=session.get('state'))
+
 
 #Connect and Disconnect endpoints.
 @app.route('/gconnect', methods=['POST'])
